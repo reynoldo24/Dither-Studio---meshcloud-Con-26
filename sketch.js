@@ -36,6 +36,12 @@ const BAYER = {
   ]
 };
 
+// ─── CACHING & PERFORMANCE ────────────────────────────────────────────────────
+let lastParams = null;
+let cachedBriArr = null;
+let cachedStateArr = null;
+let cacheValid = false;
+
 // ─── RECORDING ────────────────────────────────────────────────────────────────
 let isRecording = false;
 let mediaRecorder = null;
@@ -51,6 +57,7 @@ function setup() {
   pixelDensity(1);
   pg = createGraphics(1, 1);
   pg.pixelDensity(1);
+  frameRate(30);
 
   buildStateUI();
   setupSectionToggles();
@@ -78,20 +85,30 @@ function draw() {
   }
 
   const p = getParams();
-  const { gridCols, gridRows, outW, outH } = computeGrid(mW, mH, p);
-  if (width !== outW || height !== outH) resizeCanvas(outW, outH);
+  const paramsStr = JSON.stringify(p);
 
-  if (pg.width !== gridCols || pg.height !== gridRows) pg.resizeCanvas(gridCols, gridRows);
-  const crop = computeCrop(mW, mH, p);
-  pg.clear();
-  pg.image(currentMedia, 0, 0, gridCols, gridRows, crop.sx, crop.sy, crop.cw, crop.ch);
-  pg.loadPixels();
-  if (!pg.pixels || pg.pixels.length === 0) return;
+  // Only recompute if params changed
+  if (paramsStr !== lastParams) {
+    const { gridCols, gridRows, outW, outH } = computeGrid(mW, mH, p);
+    if (width !== outW || height !== outH) resizeCanvas(outW, outH);
 
-  const briArr = buildBrightnessArray(pg.pixels, gridCols, gridRows, p);
-  const stateArr = runDither(briArr, gridCols, gridRows, p.enableStateMap ? NUM_STATES : 1, p);
+    if (pg.width !== gridCols || pg.height !== gridRows) pg.resizeCanvas(gridCols, gridRows);
+    const crop = computeCrop(mW, mH, p);
+    pg.clear();
+    pg.image(currentMedia, 0, 0, gridCols, gridRows, crop.sx, crop.sy, crop.cw, crop.ch);
+    pg.loadPixels();
+    if (!pg.pixels || pg.pixels.length === 0) return;
 
-  renderCells(briArr, stateArr, gridCols, gridRows, p);
+    cachedBriArr = buildBrightnessArray(pg.pixels, gridCols, gridRows, p);
+    cachedStateArr = runDither(cachedBriArr, gridCols, gridRows, p.enableStateMap ? NUM_STATES : 1, p);
+    lastParams = paramsStr;
+    cacheValid = true;
+  }
+
+  if (cacheValid && cachedBriArr && cachedStateArr) {
+    const { gridCols, gridRows } = computeGrid(mW, mH, p);
+    renderCells(cachedBriArr, cachedStateArr, gridCols, gridRows, p);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,36 +196,6 @@ function drawShape(type, size) {
   }
 }
 
-// ring needs its own stroke color — patch it:
-function drawShapeWithColor(type, size, color) {
-  const h = size * 0.866;
-  const t = size * 0.28;
-  switch (type) {
-    case 'circle':   fill(color); noStroke(); ellipse(0, 0, size, size); break;
-    case 'square':   fill(color); noStroke(); rectMode(CENTER); rect(0, 0, size, size); break;
-    case 'diamond':
-      fill(color); noStroke();
-      beginShape();
-      vertex(0, -size/2); vertex(size/2, 0); vertex(0, size/2); vertex(-size/2, 0);
-      endShape(CLOSE);
-      break;
-    case 'cross':
-      fill(color); noStroke(); rectMode(CENTER);
-      rect(0, 0, size, t); rect(0, 0, t, size);
-      break;
-    case 'ring':
-      noFill(); stroke(color); strokeWeight(size * 0.18);
-      ellipse(0, 0, size * 0.72, size * 0.72); noStroke();
-      break;
-    case 'triangle':
-      fill(color); noStroke();
-      triangle(0, -h/2, size/2, h/2, -size/2, h/2);
-      break;
-    case 'dot':  fill(color); noStroke(); ellipse(0, 0, size * 0.5, size * 0.5); break;
-    default:     fill(color); noStroke(); ellipse(0, 0, size, size);
-  }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // SVG SHAPE GENERATOR
 // ─────────────────────────────────────────────────────────────────────────────
@@ -247,11 +234,8 @@ function buildBrightnessArray(pixels, w, h, p) {
   for (let i = 0; i < w * h; i++) {
     const pi = i * 4;
     let b = 0.299 * pixels[pi] + 0.587 * pixels[pi+1] + 0.114 * pixels[pi+2];
-    // Brightness
     b += (p.brightness / 100) * 128;
-    // Contrast
     b = cFactor * (b - 128) + 128;
-    // Gamma
     b = 255 * Math.pow(Math.max(0, b) / 255, 1 / p.gamma);
     arr[i] = Math.max(0, Math.min(255, b));
   }
@@ -262,7 +246,6 @@ function buildBrightnessArray(pixels, w, h, p) {
 // DITHERING ALGORITHMS
 // ─────────────────────────────────────────────────────────────────────────────
 function runDither(briArr, w, h, numStates, p) {
-  // Apply spread/intensity and invert, then run algorithm
   const pre = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++) {
     let b = ((briArr[i] - 128) * p.mapIntensity) + 128;
@@ -356,7 +339,6 @@ function runDither(briArr, w, h, numStates, p) {
 }
 
 function brightnessToState(b, numStates) {
-  // b 255=white → state 0, b 0=black → state numStates-1
   return Math.min(numStates - 1, Math.max(0, Math.floor((1 - b / 255) * numStates)));
 }
 
@@ -365,7 +347,6 @@ function stateToMidBrightness(s, numStates) {
 }
 
 function brightnessToScale(b, p) {
-  // dark (b≈0) → maxScale, light (b≈255) → minScale
   return p.minScale + (1 - b / 255) * (p.maxScale - p.minScale);
 }
 
@@ -435,24 +416,14 @@ function getParams() {
 // SVG EXPORT
 // ─────────────────────────────────────────────────────────────────────────────
 function exportSVG() {
-  if (!currentMedia) { alert('No media loaded.'); return; }
+  if (!currentMedia || !cachedBriArr || !cachedStateArr) { alert('No media loaded or not ready.'); return; }
+
   const mW = currentMedia.width  || (currentMedia.elt && currentMedia.elt.videoWidth)  || 0;
   const mH = currentMedia.height || (currentMedia.elt && currentMedia.elt.videoHeight) || 0;
   if (!mW || !mH) return;
 
   const p = getParams();
   const { gridCols, gridRows, outW, outH } = computeGrid(mW, mH, p);
-  const crop = computeCrop(mW, mH, p);
-
-  const tmp = createGraphics(gridCols, gridRows);
-  tmp.pixelDensity(1);
-  tmp.image(currentMedia, 0, 0, gridCols, gridRows, crop.sx, crop.sy, crop.cw, crop.ch);
-  tmp.loadPixels();
-
-  const briArr   = buildBrightnessArray(tmp.pixels, gridCols, gridRows, p);
-  const stateArr = runDither(briArr, gridCols, gridRows, p.enableStateMap ? NUM_STATES : 1, p);
-  tmp.remove();
-
   const cellW = outW / gridCols;
   const cellH = outH / gridRows;
   const cellSize = Math.min(cellW, cellH);
@@ -467,8 +438,8 @@ function exportSVG() {
   for (let y = 0; y < gridRows; y++) {
     for (let x = 0; x < gridCols; x++) {
       const idx   = y * gridCols + x;
-      const state = p.enableStateMap ? stateArr[idx] : 0;
-      const sf    = brightnessToScale(briArr[idx], p);
+      const state = p.enableStateMap ? cachedStateArr[idx] : 0;
+      const sf    = brightnessToScale(cachedBriArr[idx], p);
       if (sf <= 0.01) continue;
 
       const cx   = x * cellW + cellW / 2;
@@ -568,6 +539,7 @@ function loadPreset(e) {
         p.stateShapes.forEach((s, i) => { stateShapes[i] = s; set(`shape${i}`, s); });
       }
       document.querySelectorAll('input[type="range"]').forEach(el => el.dispatchEvent(new Event('input')));
+      cacheValid = false;
     } catch { alert('Invalid preset file.'); }
   };
   reader.readAsText(file);
@@ -598,6 +570,7 @@ function resetAll() {
     const el = document.getElementById(`shape${i}`);
     if (el) el.value = s;
   });
+  cacheValid = false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -626,6 +599,7 @@ function buildStateUI() {
 
     document.getElementById(`shape${i}`).addEventListener('change', e => {
       stateShapes[i] = e.target.value;
+      cacheValid = false;
     });
     document.getElementById(`svg${i}`).addEventListener('change', e => {
       const file = e.target.files[0];
@@ -633,12 +607,14 @@ function buildStateUI() {
       loadImage(URL.createObjectURL(file), img => {
         svgImages[i] = img;
         document.getElementById(`svgLabel${i}`).classList.add('has-svg');
+        cacheValid = false;
       });
     });
     document.getElementById(`reset${i}`).addEventListener('click', () => {
       document.getElementById(`svg${i}`).value = '';
       svgImages[i] = null;
       document.getElementById(`svgLabel${i}`).classList.remove('has-svg');
+      cacheValid = false;
     });
   }
 }
@@ -646,7 +622,6 @@ function buildStateUI() {
 function setupSectionToggles() {
   document.querySelectorAll('.section-header').forEach(header => {
     const body = document.getElementById(header.dataset.toggle);
-    // Start all open
     header.classList.add('open');
     header.addEventListener('click', () => {
       const isOpen = header.classList.toggle('open');
@@ -672,6 +647,7 @@ function setupSliders() {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', () => {
       document.getElementById(valId).textContent = fmt(el.value);
+      cacheValid = false;
     });
   });
 }
@@ -683,6 +659,7 @@ function setupMediaListeners() {
       currentMedia = cap; isWebcam = true;
       document.getElementById('webcamBtn').style.display = 'none';
       document.getElementById('stopWebcamBtn').style.display = '';
+      cacheValid = false;
     });
     cap.hide();
   });
@@ -706,9 +683,10 @@ function setupMediaListeners() {
       const vid = createVideo(url, () => {
         vid.loop(); vid.volume(0); vid.hide();
         currentVideo = vid; currentMedia = vid;
+        cacheValid = false;
       });
     } else {
-      loadImage(url, img => { currentMedia = img; });
+      loadImage(url, img => { currentMedia = img; cacheValid = false; });
     }
   });
 }
@@ -728,4 +706,5 @@ function setupPresetListeners() {
 function cleanupMedia() {
   if (currentVideo) { currentVideo.pause(); currentVideo.remove(); currentVideo = null; }
   currentMedia = null; isWebcam = false;
+  cacheValid = false;
 }
