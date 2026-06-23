@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Advanced SVG Halftone & Dither</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+  <link rel="stylesheet" type="text/css" href="style.css">
+</head>
+<body>
+  <div id="app-container">
+    <div id="control-panel">
+      <h2>CONTROL PANEL</h2>
+
+      <div class="control-group">
+        <label>1. MEDIA SOURCE</label>
+        <input type="file" id="mediaUpload" accept="image/*,video/*">
+        <button id="webcamBtn">Start Webcam</button>
+      </div>
+
+      <div class="control-group">
+        <label>ASPECT RATIO / CROPPING</label>
+        <select id="aspectRatio">
+          <option value="original">Original Aspect Ratio</option>
+          <option value="1x1">1x1 Square</option>
+        </select>
+        
+        <div class="label-row" style="margin-top: 10px;">
+          <label>OVERALL MEDIA SCALE</label><span class="val-display" id="val-mediaScale">100%</span>
+        </div>
+        <input type="range" id="mediaScale" min="10" max="300" value="100" oninput="document.getElementById('val-mediaScale').innerText = this.value + '%'">
+        
+        <div class="label-row" style="margin-top: 10px;">
+          <label>CANVAS OUTPUT RESOLUTION</label><span class="val-display" id="val-canvasRes">1000px</span>
+        </div>
+        <input type="range" id="canvasRes" min="500" max="3000" value="1000" step="100" oninput="document.getElementById('val-canvasRes').innerText = this.value + 'px'">
+        <label class="sub-label" style="margin-top:-5px;">Scales total pixel dimensions invisibly</label>
+      </div>
+
+      <div class="control-group">
+        <div class="label-row">
+          <label>GRID RESOLUTION (SCALE)</label><span class="val-display" id="val-gridRes">50</span>
+        </div>
+        <input type="range" id="gridRes" min="0" max="250" value="50" oninput="document.getElementById('val-gridRes').innerText = this.value">
+      </div>
+
+      <div class="control-group">
+        <label>BACKGROUND COLOR</label>
+        <input type="color" id="bgColor" value="#000000">
+      </div>
+
+      <div class="control-group checkbox-group">
+        <input type="checkbox" id="fillSvg" checked>
+        <label for="fillSvg">TINT SHAPES WITH STATE COLORS</label>
+      </div>
+
+      <div class="control-group checkbox-group">
+        <input type="checkbox" id="invertMapping">
+        <label for="invertMapping">QUICK INVERT MAPPING</label>
+      </div>
+
+      <div class="control-group">
+        <div class="checkbox-group">
+          <input type="checkbox" id="enableStateMap" checked>
+          <label for="enableStateMap">ENABLE 7-STATE MAPPING</label>
+        </div>
+        <div class="label-row" style="margin-top: 10px;">
+          <label>MAPPING INTENSITY</label><span class="val-display" id="val-mapIntensity">100%</span>
+        </div>
+        <input type="range" id="mapIntensity" min="0" max="200" value="100" oninput="document.getElementById('val-mapIntensity').innerText = this.value + '%'">
+      </div>
+
+      <div class="control-group">
+        <label>7-STATE MIDTONE MAPPING & COLORS</label>
+        <div class="state-row">
+          <input type="color" id="color0" value="#ffffff" class="state-thumb">
+          <label class="state-label">1 (High)</label>
+          <div class="upload-wrapper"><input type="file" id="svg0" accept=".svg"><button class="reset-btn" id="reset0">X</button></div>
+        </div>
+        <div class="state-row">
+          <input type="color" id="color1" value="#cccccc" class="state-thumb">
+          <label class="state-label">2 (Lt Mid)</label>
+          <div class="upload-wrapper"><input type="file" id="svg1" accept=".svg"><button class="reset-btn" id="reset1">X</button></div>
+        </div>
+        <div class="state-row">
+          <input type="color" id="color2" value="#999999" class="state-thumb">
+          <label class="state-label">3 (Mid Hi)</label>
+          <div class="upload-wrapper"><input type="file" id="svg2" accept=".svg"><button class="reset-btn" id="reset2">X</button></div>
+        </div>
+        <div class="state-row">
+          <input type="color" id="color3" value="#777777" class="state-thumb">
+          <label class="state-label">4 (Mid)</label>
+          <div class="upload-wrapper"><input type="file" id="svg3" accept=".svg"><button class="reset-btn" id="reset3">X</button></div>
+        </div>
+        <div class="state-row">
+          <input type="color" id="color4" value="#555555" class="state-thumb">
+          <label class="state-label">5 (Mid Lo)</label>
+          <div class="upload-wrapper"><input type="file" id="svg4" accept=".svg"><button class="reset-btn" id="reset4">X</button></div>
+        </div>
+        <div class="state-row">
+          <input type="color" id="color5" value="#333333" class="state-thumb">
+          <label class="state-label">6 (Dk Mid)</label>
+          <div class="upload-wrapper"><input type="file" id="svg5" accept=".svg"><button class="reset-btn" id="reset5">X</button></div>
+        </div>
+        <div class="state-row">
+          <input type="color" id="color6" value="#111111" class="state-thumb">
+          <label class="state-label">7 (Shadow)</label>
+          <div class="upload-wrapper"><input type="file" id="svg6" accept=".svg"><button class="reset-btn" id="reset6">X</button></div>
+        </div>
+      </div>
+
+      <div class="control-group">
+        <div class="label-row">
+          <label>SCALE MIN SIZE</label><span class="val-display" id="val-minScale">50%</span>
+        </div>
+        <input type="range" id="minScale" min="-100" max="100" value="50" oninput="document.getElementById('val-minScale').innerText = this.value + '%'">
+        
+        <div class="label-row" style="margin-top: 10px;">
+          <label>SCALE MAX SIZE</label><span class="val-display" id="val-maxScale">150%</span>
+        </div>
+        <input type="range" id="maxScale" min="10" max="200" value="150" oninput="document.getElementById('val-maxScale').innerText = this.value + '%'">
+      </div>
+
+      <div class="control-group">
+        <div class="checkbox-group">
+          <input type="checkbox" id="snapRot" checked>
+          <label for="snapRot">ENABLE 90° SNAP ROTATION</label>
+        </div>
+        <div class="label-row" style="margin-top: 10px;">
+          <label>ROTATION INTERVAL</label><span class="val-display" id="val-rotInterval">500ms</span>
+        </div>
+        <input type="range" id="rotInterval" min="100" max="2000" value="500" dir="rtl" oninput="document.getElementById('val-rotInterval').innerText = this.value + 'ms'">
+      </div>
+
+      <div class="control-group" style="border-color: #2a5a7a;">
+        <label>PRESETS & DEFAULTS</label>
+        <div style="display: flex; gap: 10px;">
+          <button id="savePresetBtn" style="flex: 1; background-color: #1a4a6a;">Save Preset</button>
+          <label for="loadPresetInput" class="custom-file-btn" style="flex: 1; background-color: #333; text-align: center;">Load Preset</label>
+          <input type="file" id="loadPresetInput" accept=".json" style="display: none;">
+        </div>
+        <button id="resetAllBtn" style="margin-top: 5px; background-color: #6a1a1a; width: 100%;">Reset All Values to Default</button>
+      </div>
+
+      <div class="control-group" style="border-color: #555;">
+        <label>EXPORT OPTIONS</label>
+        <button id="exportPng" style="background-color: #2a5a2a;">Download PNG</button>
+        <button id="exportVid" style="background-color: #5a2a2a;">Record Video (.mp4 / .webm)</button>
+        <label id="recStatus" class="sub-label" style="color: #ff5555; display: none; text-align: center;">🔴 Recording... Click again to stop</label>
+      </div>
+
+    </div>
+    <div id="canvas-container"></div>
+  </div>
+  <script src="sketch.js"></script>
+</body>
+</html>
