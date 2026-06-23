@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Dither Studio</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="panel">
+
+      <div id="panel-header">
+        <span class="logo">◈</span>
+        <h1>DITHER STUDIO</h1>
+      </div>
+
+      <!-- 01 MEDIA -->
+      <div class="section">
+        <div class="section-header" data-toggle="media-body">
+          <span>01 — MEDIA SOURCE</span><span class="chevron">▾</span>
+        </div>
+        <div class="section-body" id="media-body">
+          <div class="row">
+            <button id="webcamBtn" class="btn-outline">⬤ WEBCAM</button>
+            <button id="stopWebcamBtn" class="btn-outline" style="display:none">◼ STOP</button>
+          </div>
+          <label class="file-label" for="mediaUpload">▲ UPLOAD IMAGE / VIDEO</label>
+          <input type="file" id="mediaUpload" accept="image/*,video/*">
+          <div id="mediaInfo" class="info-tag" style="display:none"></div>
+        </div>
+      </div>
+
+      <!-- 02 CANVAS -->
+      <div class="section">
+        <div class="section-header" data-toggle="canvas-body">
+          <span>02 — CANVAS</span><span class="chevron">▾</span>
+        </div>
+        <div class="section-body" id="canvas-body">
+          <label>ASPECT RATIO</label>
+          <select id="aspectRatio">
+            <option value="original">Original</option>
+            <option value="1x1">1 : 1 Square</option>
+            <option value="16x9">16 : 9 Landscape</option>
+            <option value="9x16">9 : 16 Portrait</option>
+            <option value="4x3">4 : 3 Classic</option>
+            <option value="3x2">3 : 2 Photo</option>
+            <option value="2x1">2 : 1 Panorama</option>
+          </select>
+          <div class="slider-row">
+            <label>MEDIA SCALE <span class="val" id="val-mediaScale">100%</span></label>
+            <input type="range" id="mediaScale" min="10" max="300" value="100">
+          </div>
+          <div class="slider-row">
+            <label>OUTPUT RESOLUTION <span class="val" id="val-canvasRes">1000px</span></label>
+            <input type="range" id="canvasRes" min="500" max="4000" value="1000" step="100">
+          </div>
+          <label>BACKGROUND COLOR</label>
+          <input type="color" id="bgColor" value="#000000">
+        </div>
+      </div>
+
+      <!-- 03 DITHER -->
+      <div class="section">
+        <div class="section-header" data-toggle="dither-body">
+          <span>03 — DITHER</span><span class="chevron">▾</span>
+        </div>
+        <div class="section-body" id="dither-body">
+          <label>ALGORITHM</label>
+          <select id="ditherAlgo">
+            <option value="threshold">Threshold</option>
+            <option value="ordered2">Ordered — Bayer 2×2</option>
+            <option value="ordered4" selected>Ordered — Bayer 4×4</option>
+            <option value="ordered8">Ordered — Bayer 8×8</option>
+            <option value="floyd">Floyd–Steinberg</option>
+            <option value="atkinson">Atkinson</option>
+            <option value="sierra">Sierra Lite</option>
+          </select>
+          <div class="slider-row">
+            <label>GRID RESOLUTION <span class="val" id="val-gridRes">50</span></label>
+            <input type="range" id="gridRes" min="1" max="300" value="50">
+          </div>
+          <div class="toggle-row">
+            <input type="checkbox" id="invertMapping">
+            <label for="invertMapping">INVERT</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- 04 IMAGE ADJUSTMENTS -->
+      <div class="section">
+        <div class="section-header" data-toggle="adjust-body">
+          <span>04 — IMAGE ADJUSTMENTS</span><span class="chevron">▾</span>
+        </div>
+        <div class="section-body" id="adjust-body">
+          <div class="slider-row">
+            <label>BRIGHTNESS <span class="val" id="val-brightness">0</span></label>
+            <input type="range" id="brightness" min="-100" max="100" value="0">
+          </div>
+          <div class="slider-row">
+            <label>CONTRAST <span class="val" id="val-contrast">0</span></label>
+            <input type="range" id="contrast" min="-100" max="100" value="0">
+          </div>
+          <div class="slider-row">
+            <label>GAMMA <span class="val" id="val-gamma">1.0</span></label>
+            <input type="range" id="gamma" min="10" max="300" value="100">
+          </div>
+          <div class="slider-row">
+            <label>SPREAD / INTENSITY <span class="val" id="val-mapIntensity">100%</span></label>
+            <input type="range" id="mapIntensity" min="0" max="200" value="100">
+          </div>
+        </div>
+      </div>
+
+      <!-- 05 STATES & SHAPES -->
+      <div class="section">
+        <div class="section-header" data-toggle="states-body">
+          <span>05 — STATES & SHAPES</span><span class="chevron">▾</span>
+        </div>
+        <div class="section-body" id="states-body">
+          <div class="toggle-row">
+            <input type="checkbox" id="enableStateMap" checked>
+            <label for="enableStateMap">7-STATE MAPPING</label>
+          </div>
+          <div class="toggle-row">
+            <input type="checkbox" id="fillSvg" checked>
+            <label for="fillSvg">TINT WITH STATE COLORS</label>
+          </div>
+          <div id="stateList"></div>
+        </div>
+      </div>
+
+      <!-- 06 SHAPE SIZING -->
+      <div class="section">
+        <div class="section-header" data-toggle="shape-body">
+          <span>06 — SHAPE SIZING</span><span class="chevron">▾</span>
+        </div>
+        <div class="section-body" id="shape-body">
+          <div class="slider-row">
+            <label>MIN SIZE (LIGHT) <span class="val" id="val-minScale">20%</span></label>
+            <input type="range" id="minScale" min="0" max="200" value="20">
+          </div>
+          <div class="slider-row">
+            <label>MAX SIZE (DARK) <span class="val" id="val-maxScale">120%</span></label>
+            <input type="range" id="maxScale" min="10" max="250" value="120">
+          </div>
+        </div>
+      </div>
+
+      <!-- 07 ANIMATION -->
+      <div class="section">
+        <div class="section-header" data-toggle="anim-body">
+          <span>07 — ANIMATION</span><span class="chevron">▾</span>
+        </div>
+        <div class="section-body" id="anim-body">
+          <div class="toggle-row">
+            <input type="checkbox" id="snapRot">
+            <label for="snapRot">90° SNAP ROTATION</label>
+          </div>
+          <div class="slider-row">
+            <label>ROTATION SPEED <span class="val" id="val-rotInterval">500ms</span></label>
+            <input type="range" id="rotInterval" min="50" max="2000" value="500" dir="rtl">
+          </div>
+        </div>
+      </div>
+
+      <!-- 08 PRESETS -->
+      <div class="section">
+        <div class="section-header" data-toggle="preset-body">
+          <span>08 — PRESETS</span><span class="chevron">▾</span>
+        </div>
+        <div class="section-body" id="preset-body">
+          <div class="row">
+            <button id="savePresetBtn" class="btn-outline">↓ SAVE PRESET</button>
+            <label for="loadPresetInput" class="btn-outline btn-label">↑ LOAD PRESET</label>
+            <input type="file" id="loadPresetInput" accept=".json">
+          </div>
+          <button id="resetAllBtn" class="btn-danger">RESET ALL TO DEFAULT</button>
+        </div>
+      </div>
+
+      <!-- 09 EXPORT -->
+      <div class="section">
+        <div class="section-header" data-toggle="export-body">
+          <span>09 — EXPORT</span><span class="chevron">▾</span>
+        </div>
+        <div class="section-body" id="export-body">
+          <button id="exportPng" class="btn-export">↓ PNG (RASTER)</button>
+          <button id="exportSvg" class="btn-export btn-svg">↓ SVG (VECTOR)</button>
+          <button id="exportVid" class="btn-export btn-record">⬤ RECORD VIDEO</button>
+          <div id="recStatus" style="display:none">
+            <span class="rec-dot">⬤</span> RECORDING — click to stop
+          </div>
+          <p class="hint">SVG export captures current frame as scalable vector shapes.</p>
+        </div>
+      </div>
+
+    </aside>
+    <main id="canvas-container"></main>
+  </div>
+
+  <script src="sketch.js"></script>
+</body>
+</html>
