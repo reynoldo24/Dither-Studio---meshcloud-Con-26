@@ -418,7 +418,7 @@ function svgShape(type, cx, cy, size, color) {
 async function startMicrophone() {
   try {
     audioContext = audioContext || new (window.AudioContext || window.webkitAudioContext)();
-    let stream = await navigator.mediaDevices.getUserUserMedia({ audio: true });
+    let stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioSource = audioContext.createMediaStreamSource(stream);
     analyser = audioContext.createAnalyser();
     analyser.fftSize = 256;
@@ -537,7 +537,7 @@ function loadPreset(e) {
       if (preset.maxScale) document.getElementById('maxScale').value = preset.maxScale;
       if (preset.snapRot !== undefined) document.getElementById('snapRot').checked = preset.snapRot;
       if (preset.rotInterval) document.getElementById('rotInterval').value = preset.rotInterval;
-      if (preset.stateShapes) preset.stateShapes.forEach((s, i) => { stateShapes[i] = s; if (document.getElementById(`shape${i}`)) document.getElementById(`shape${i}`).value = s; });
+      if (preset.stateShapes) preset.stateShapes.forEach((s, i) => { stateShapes[i] = s; });
       if (preset.colors) preset.colors.forEach((c, i) => document.getElementById(`color${i}`).value = c);
       lastParams = null;
     } catch { alert('Invalid preset'); }
@@ -564,7 +564,7 @@ function resetAll() {
 
   let colors = ['#ffffff','#cccccc','#999999','#777777','#555555','#333333','#111111'];
   colors.forEach((c, i) => document.getElementById(`color${i}`).value = c);
-  stateShapes.forEach((_, i) => { stateShapes[i] = 'circle'; if (document.getElementById(`shape${i}`)) document.getElementById(`shape${i}`).value = 'circle'; });
+  stateShapes.forEach((_, i) => { stateShapes[i] = 'circle'; });
 
   lastParams = null;
   updateAllLabels();
@@ -585,24 +585,14 @@ function updateAllLabels() {
 // ─────────────────────────────────────────────────────────────────────────────
 function buildShapeUI() {
   for (let i = 0; i < 7; i++) {
-    let select = document.createElement('select');
-    select.id = `shape${i}`;
-    select.className = 'shape-select';
-    SHAPES.forEach(s => {
-      let opt = document.createElement('option');
-      opt.value = s;
-      opt.textContent = s.toUpperCase();
-      if (s === 'circle') opt.selected = true;
-      select.appendChild(opt);
-    });
-    select.addEventListener('change', e => { stateShapes[i] = e.target.value; lastParams = null; });
-
     let svg = document.getElementById(`svg${i}`);
-    svg.addEventListener('change', e => {
-      let file = e.target.files[0];
-      if (!file) return;
-      loadImage(URL.createObjectURL(file), img => { svgs[i] = img; });
-    });
+    if (svg) {
+      svg.addEventListener('change', e => {
+        let file = e.target.files[0];
+        if (!file) return;
+        loadImage(URL.createObjectURL(file), img => { svgs[i] = img; });
+      });
+    }
   }
 }
 
