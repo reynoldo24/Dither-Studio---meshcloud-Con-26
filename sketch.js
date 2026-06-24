@@ -2,334 +2,317 @@
 let currentMedia = null;
 let currentVideo = null;
 let isWebcam = false;
-let svgImages = [null, null, null, null, null, null, null];
+let svgs = [null, null, null, null, null, null, null];
 let stateShapes = ['circle','circle','circle','circle','circle','circle','circle'];
 let pg;
 
-const NUM_STATES = 7;
-const STATE_LABELS = ['1·HIGH','2·LT-MID','3·MID-HI','4·MID','5·MID-LO','6·DK-MID','7·SHADOW'];
-const DEFAULT_COLORS = ['#ffffff','#cccccc','#999999','#777777','#555555','#333333','#111111'];
-const DEFAULT_SHAPES = ['circle','circle','circle','circle','circle','circle','circle'];
 const SHAPES = ['circle','square','diamond','cross','ring','triangle','dot'];
+const STATE_LABELS = ['1 (High)','2 (Lt Mid)','3 (Mid Hi)','4 (Mid)','5 (Mid Lo)','6 (Dk Mid)','7 (Shadow)'];
 
 // ─── BAYER MATRICES ───────────────────────────────────────────────────────────
 const BAYER = {
-  2: [
-    [0, 2],
-    [3, 1]
-  ],
+  2: [[0, 2], [3, 1]],
   4: [
-    [ 0,  8,  2, 10],
-    [12,  4, 14,  6],
-    [ 3, 11,  1,  9],
-    [15,  7, 13,  5]
+    [ 0,  8,  2, 10], [12,  4, 14,  6],
+    [ 3, 11,  1,  9], [15,  7, 13,  5]
   ],
   8: [
-    [ 0, 32,  8, 40,  2, 34, 10, 42],
-    [48, 16, 56, 24, 50, 18, 58, 26],
-    [12, 44,  4, 36, 14, 46,  6, 38],
-    [60, 28, 52, 20, 62, 30, 54, 22],
-    [ 3, 35, 11, 43,  1, 33,  9, 41],
-    [51, 19, 59, 27, 49, 17, 57, 25],
-    [15, 47,  7, 39, 13, 45,  5, 37],
-    [63, 31, 55, 23, 61, 29, 53, 21]
+    [ 0, 32,  8, 40,  2, 34, 10, 42], [48, 16, 56, 24, 50, 18, 58, 26],
+    [12, 44,  4, 36, 14, 46,  6, 38], [60, 28, 52, 20, 62, 30, 54, 22],
+    [ 3, 35, 11, 43,  1, 33,  9, 41], [51, 19, 59, 27, 49, 17, 57, 25],
+    [15, 47,  7, 39, 13, 45,  5, 37], [63, 31, 55, 23, 61, 29, 53, 21]
   ]
 };
 
-// ─── CACHING & PERFORMANCE ────────────────────────────────────────────────────
+// ─── AUDIO ────────────────────────────────────────────────────────────────────
+let audioContext = null;
+let analyser = null;
+let dataArray = null;
+let audioSource = null;
+let audioEnabled = false;
+let audioFile = null;
+let audioFileContext = null;
+
+let audioData = {
+  bass: 0,      // low freq (controls scale)
+  mid: 0,       // mid freq (controls rotation)
+  treble: 0,    // high freq (controls grid)
+  overall: 0
+};
+
+// ─── CACHING ──────────────────────────────────────────────────────────────────
 let lastParams = null;
 let cachedBriArr = null;
 let cachedStateArr = null;
-let cacheValid = false;
 
 // ─── RECORDING ────────────────────────────────────────────────────────────────
 let isRecording = false;
-let mediaRecorder = null;
+let mediaRecorder;
 let recordedChunks = [];
 let exportExt = 'webm';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// P5 SETUP
-// ─────────────────────────────────────────────────────────────────────────────
 function setup() {
-  const canvas = createCanvas(1000, 1000);
+  let canvas = createCanvas(1000, 1000);
   canvas.parent('canvas-container');
   pixelDensity(1);
-  pg = createGraphics(1, 1);
-  pg.pixelDensity(1);
   frameRate(30);
+  pg = createGraphics(150, 150);
+  pg.pixelDensity(1);
 
-  buildStateUI();
-  setupSectionToggles();
-  setupSliders();
-  setupMediaListeners();
-  setupExportListeners();
-  setupPresetListeners();
+  setupDOMListeners();
+  buildShapeUI();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// P5 DRAW
-// ─────────────────────────────────────────────────────────────────────────────
 function draw() {
-  const bgColor = document.getElementById('bgColor').value;
+  let bgColor = document.getElementById('bgColor').value;
   background(bgColor);
 
-  const mW = currentMedia ? (currentMedia.width  || (currentMedia.elt && currentMedia.elt.videoWidth))  : 0;
-  const mH = currentMedia ? (currentMedia.height || (currentMedia.elt && currentMedia.elt.videoHeight)) : 0;
+  let mWidth = currentMedia ? (currentMedia.width || (currentMedia.elt && currentMedia.elt.videoWidth)) : 0;
+  let mHeight = currentMedia ? (currentMedia.height || (currentMedia.elt && currentMedia.elt.videoHeight)) : 0;
 
-  if (!currentMedia || !mW || !mH) {
-    fill(50); noStroke(); textAlign(CENTER, CENTER);
-    textSize(width * 0.022); textStyle(NORMAL);
-    text('LOAD MEDIA TO BEGIN', width / 2, height / 2);
+  if (!currentMedia || !mWidth || !mHeight) {
+    fill(50); noStroke(); textAlign(CENTER, CENTER); textSize(width * 0.03);
+    text("LOAD MEDIA TO BEGIN", width / 2, height / 2);
     return;
   }
 
-  const p = getParams();
-  const paramsStr = JSON.stringify(p);
+  let p = getParams();
+  let aspect = getTargetAspect(p.aspectRatio, mWidth, mHeight);
+  let mAspect = mWidth / mHeight;
 
-  // Only recompute if params changed
-  if (paramsStr !== lastParams) {
-    const { gridCols, gridRows, outW, outH } = computeGrid(mW, mH, p);
-    if (width !== outW || height !== outH) resizeCanvas(outW, outH);
-
-    if (pg.width !== gridCols || pg.height !== gridRows) pg.resizeCanvas(gridCols, gridRows);
-    const crop = computeCrop(mW, mH, p);
-    pg.clear();
-    pg.image(currentMedia, 0, 0, gridCols, gridRows, crop.sx, crop.sy, crop.cw, crop.ch);
-    pg.loadPixels();
-    if (!pg.pixels || pg.pixels.length === 0) return;
-
-    cachedBriArr = buildBrightnessArray(pg.pixels, gridCols, gridRows, p);
-    cachedStateArr = runDither(cachedBriArr, gridCols, gridRows, p.enableStateMap ? NUM_STATES : 1, p);
-    lastParams = paramsStr;
-    cacheValid = true;
+  let outW, outH, gridCols, gridRows;
+  if (aspect >= 1) {
+    outW = p.canvasRes; outH = Math.floor(p.canvasRes / aspect);
+    gridCols = p.gridRes; gridRows = Math.max(1, Math.floor(p.gridRes / aspect));
+  } else {
+    outH = p.canvasRes; outW = Math.floor(p.canvasRes * aspect);
+    gridRows = p.gridRes; gridCols = Math.max(1, Math.floor(p.gridRes * aspect));
   }
 
-  if (cacheValid && cachedBriArr && cachedStateArr) {
-    const { gridCols, gridRows } = computeGrid(mW, mH, p);
-    renderCells(cachedBriArr, cachedStateArr, gridCols, gridRows, p);
+  if (width !== outW || height !== outH) resizeCanvas(outW, outH);
+
+  let cx = mWidth / 2, cy = mHeight / 2;
+  let sourceW = (p.aspectRatio === '1x1') ? Math.min(mWidth, mHeight) : mWidth;
+  let sourceH = (p.aspectRatio === '1x1') ? Math.min(mWidth, mHeight) : mHeight;
+  let cropW = sourceW / p.mediaScale, cropH = sourceH / p.mediaScale;
+  let sx = cx - (cropW / 2), sy = cy - (cropH / 2);
+
+  pg.resizeCanvas(gridCols, gridRows);
+  pg.clear();
+  pg.image(currentMedia, 0, 0, gridCols, gridRows, sx, sy, cropW, cropH);
+  pg.loadPixels();
+
+  let paramsStr = JSON.stringify(p);
+  if (paramsStr !== lastParams) {
+    cachedBriArr = buildBrightnessArray(pg.pixels, gridCols, gridRows, p);
+    cachedStateArr = runDither(cachedBriArr, gridCols, gridRows, p.enableStateMap ? 7 : 1, p);
+    lastParams = paramsStr;
+  }
+
+  if (cachedBriArr && cachedStateArr) {
+    renderCells(cachedBriArr, cachedStateArr, gridCols, gridRows, p, outW, outH);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RENDER CELLS TO P5 CANVAS
-// ─────────────────────────────────────────────────────────────────────────────
-function renderCells(briArr, stateArr, gridCols, gridRows, p) {
-  const cellW = width  / gridCols;
-  const cellH = height / gridRows;
-  const cellSize = Math.min(cellW, cellH);
-  const rotStep = Math.floor(millis() / p.rotInterval);
-  const rot = p.snapRot ? (rotStep % 4) * HALF_PI : 0;
+function renderCells(briArr, stateArr, gridCols, gridRows, p, outW, outH) {
+  let cellW = outW / gridCols, cellH = outH / gridRows;
+  let drawSize = Math.min(cellW, cellH);
+
+  // Audio modulation
+  let audioScale = audioEnabled ? (1 + audioData.bass * 0.5) : 1;
+  let audioRot = audioEnabled ? (audioData.mid * Math.PI * 2) : 0;
 
   noStroke();
   for (let y = 0; y < gridRows; y++) {
     for (let x = 0; x < gridCols; x++) {
-      const idx = y * gridCols + x;
-      const state = p.enableStateMap ? stateArr[idx] : 0;
-      const sf = brightnessToScale(briArr[idx], p);
-      if (sf <= 0.01) continue;
+      let index = (x + y * gridCols);
+      let r = pg.pixels[index * 4];
+      let g = pg.pixels[index * 4 + 1];
+      let b = pg.pixels[index * 4 + 2];
+      let a = pg.pixels[index * 4 + 3];
 
-      const stateColor = p.stateColors[state];
-      const shapeType  = stateShapes[state];
+      if (a === 0) continue;
+
+      let brightness = (0.299 * r) + (0.587 * g) + (0.114 * b);
+      brightness = ((brightness - 128) * p.mapIntensity) + 128;
+      brightness = constrain(brightness, 0, 255);
+      if (p.invertMapping) brightness = 255 - brightness;
+
+      let state = p.enableStateMap ? Math.floor(map(brightness, 255, 0, 0, 6.99)) : 6;
+      state = constrain(state, 0, 6);
+
+      let midtoneDist = Math.abs(brightness - 128);
+      let scaleFactor = map(midtoneDist, 0, 128, p.minScale, p.maxScale) * audioScale;
+
+      if (scaleFactor <= 0.015) continue;
+
+      let currentRot = 0;
+      if (p.snapRot) {
+        let step = Math.floor(millis() / p.rotInterval);
+        currentRot = (step % 4) * HALF_PI;
+      }
+      currentRot += audioRot;
+
+      let activeColor = document.getElementById(`color${state}`).value;
+      if (p.fillSvg) tint(activeColor); else noTint();
 
       push();
       translate(x * cellW + cellW / 2, y * cellH + cellH / 2);
-      if (p.snapRot) rotate(rot);
-      scale(sf);
+      rotate(currentRot);
+      scale(scaleFactor);
+      drawingContext.globalAlpha = a / 255.0;
+      imageMode(CENTER);
 
-      if (svgImages[state]) {
-        if (p.doFill) tint(stateColor); else noTint();
-        imageMode(CENTER);
-        image(svgImages[state], 0, 0, cellSize, cellSize);
+      if (svgs[state]) {
+        image(svgs[state], 0, 0, drawSize, drawSize);
       } else {
-        if (p.doFill) fill(stateColor); else fill(150);
+        fill(p.fillSvg ? activeColor : 150);
         noStroke();
-        drawShape(shapeType, cellSize);
+        rectMode(CENTER);
+
+        let shapeType = stateShapes[state];
+        drawShape(shapeType, drawSize);
       }
       pop();
     }
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SHAPE DRAWING (P5)
-// ─────────────────────────────────────────────────────────────────────────────
 function drawShape(type, size) {
-  const h = size * 0.866;
-  const t = size * 0.28;
   switch (type) {
     case 'circle':
       ellipse(0, 0, size, size);
       break;
     case 'square':
-      rectMode(CENTER);
       rect(0, 0, size, size);
       break;
     case 'diamond':
       beginShape();
       vertex(0, -size / 2);
       vertex(size / 2, 0);
-      vertex(0,  size / 2);
+      vertex(0, size / 2);
       vertex(-size / 2, 0);
       endShape(CLOSE);
       break;
     case 'cross':
-      rectMode(CENTER);
-      rect(0, 0, size, t);
-      rect(0, 0, t, size);
+      rect(0, 0, size, size * 0.28);
+      rect(0, 0, size * 0.28, size);
       break;
     case 'ring':
       noFill();
-      stroke(p5.instance ? p5.instance._renderer.fillColor() : '#fff');
+      stroke(fill);
       strokeWeight(size * 0.18);
-      ellipse(0, 0, size * 0.72, size * 0.72);
+      ellipse(0, 0, size * 0.72);
       noStroke();
       break;
     case 'triangle':
-      triangle(0, -h / 2, size / 2, h / 2, -size / 2, h / 2);
+      triangle(0, -size / 2, size / 2, size / 2, -size / 2, size / 2);
       break;
     case 'dot':
-      ellipse(0, 0, size * 0.5, size * 0.5);
+      ellipse(0, 0, size * 0.5);
       break;
-    default:
-      ellipse(0, 0, size, size);
   }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// SVG SHAPE GENERATOR
-// ─────────────────────────────────────────────────────────────────────────────
-function svgShapeEl(type, cx, cy, size, color) {
-  const h = size * 0.866;
-  const t = size * 0.28;
-  switch (type) {
-    case 'circle':
-      return `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(size/2)}" fill="${color}"/>`;
-    case 'square':
-      return `<rect x="${f(cx-size/2)}" y="${f(cy-size/2)}" width="${f(size)}" height="${f(size)}" fill="${color}"/>`;
-    case 'diamond':
-      return `<polygon points="${f(cx)},${f(cy-size/2)} ${f(cx+size/2)},${f(cy)} ${f(cx)},${f(cy+size/2)} ${f(cx-size/2)},${f(cy)}" fill="${color}"/>`;
-    case 'cross':
-      return `<rect x="${f(cx-size/2)}" y="${f(cy-t/2)}" width="${f(size)}" height="${f(t)}" fill="${color}"/>`
-           + `<rect x="${f(cx-t/2)}" y="${f(cy-size/2)}" width="${f(t)}" height="${f(size)}" fill="${color}"/>`;
-    case 'ring':
-      return `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(size*0.36)}" fill="none" stroke="${color}" stroke-width="${f(size*0.18)}"/>`;
-    case 'triangle':
-      return `<polygon points="${f(cx)},${f(cy-h/2)} ${f(cx+size/2)},${f(cy+h/2)} ${f(cx-size/2)},${f(cy+h/2)}" fill="${color}"/>`;
-    case 'dot':
-      return `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(size*0.25)}" fill="${color}"/>`;
-    default:
-      return `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(size/2)}" fill="${color}"/>`;
-  }
-}
-
-function f(n) { return Math.round(n * 100) / 100; }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IMAGE ADJUSTMENTS
 // ─────────────────────────────────────────────────────────────────────────────
 function buildBrightnessArray(pixels, w, h, p) {
-  const arr = new Float32Array(w * h);
-  const cFactor = (259 * (p.contrast + 255)) / (255 * (259 - p.contrast));
+  let arr = new Float32Array(w * h);
   for (let i = 0; i < w * h; i++) {
-    const pi = i * 4;
+    let pi = i * 4;
     let b = 0.299 * pixels[pi] + 0.587 * pixels[pi+1] + 0.114 * pixels[pi+2];
-    b += (p.brightness / 100) * 128;
-    b = cFactor * (b - 128) + 128;
-    b = 255 * Math.pow(Math.max(0, b) / 255, 1 / p.gamma);
-    arr[i] = Math.max(0, Math.min(255, b));
+    arr[i] = constrain(b, 0, 255);
   }
   return arr;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DITHERING ALGORITHMS
+// DITHERING
 // ─────────────────────────────────────────────────────────────────────────────
 function runDither(briArr, w, h, numStates, p) {
-  const pre = new Float32Array(w * h);
+  let pre = new Float32Array(briArr);
   for (let i = 0; i < w * h; i++) {
-    let b = ((briArr[i] - 128) * p.mapIntensity) + 128;
-    b = Math.max(0, Math.min(255, b));
-    if (p.invert) b = 255 - b;
+    let b = ((pre[i] - 128) * p.mapIntensity) + 128;
+    b = constrain(b, 0, 255);
+    if (p.invertMapping) b = 255 - b;
     pre[i] = b;
   }
 
-  const out = new Int32Array(w * h);
-  const algo = p.algo;
+  let out = new Int32Array(w * h);
+  let algo = p.algo;
 
   if (algo === 'threshold') {
     for (let i = 0; i < w * h; i++) {
-      out[i] = brightnessToState(pre[i], numStates);
+      out[i] = Math.min(numStates - 1, Math.max(0, Math.floor((1 - pre[i] / 255) * numStates)));
     }
-
   } else if (algo.startsWith('ordered')) {
-    const n = parseInt(algo.replace('ordered', ''));
-    const mat = BAYER[n];
-    const maxM = n * n;
-    const spread = 255 / numStates;
+    let n = parseInt(algo.replace('ordered', ''));
+    let mat = BAYER[n];
+    let maxM = n * n;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        const noise = (mat[y % n][x % n] / maxM - 0.5) * spread;
-        const b = Math.max(0, Math.min(255, pre[i] + noise));
-        out[i] = brightnessToState(b, numStates);
+        let i = y * w + x;
+        let noise = (mat[y % n][x % n] / maxM - 0.5) * 255 / numStates;
+        let b = constrain(pre[i] + noise, 0, 255);
+        out[i] = Math.min(numStates - 1, Math.max(0, Math.floor((1 - b / 255) * numStates)));
       }
     }
-
   } else if (algo === 'floyd') {
-    const buf = new Float32Array(pre);
+    let buf = new Float32Array(pre);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        const old = buf[i];
-        const s = brightnessToState(old, numStates);
+        let i = y * w + x;
+        let old = buf[i];
+        let s = Math.min(numStates - 1, Math.max(0, Math.floor((1 - old / 255) * numStates)));
         out[i] = s;
-        const qb = stateToMidBrightness(s, numStates);
-        const err = old - qb;
-        if (x + 1 < w)          buf[i + 1]     += err * 7 / 16;
+        let qb = (1 - (s + 0.5) / numStates) * 255;
+        let err = old - qb;
+        if (x + 1 < w) buf[i + 1] += err * 7 / 16;
         if (y + 1 < h) {
-          if (x - 1 >= 0)        buf[i + w - 1] += err * 3 / 16;
-                                 buf[i + w]     += err * 5 / 16;
-          if (x + 1 < w)         buf[i + w + 1] += err * 1 / 16;
+          if (x - 1 >= 0) buf[i + w - 1] += err * 3 / 16;
+          buf[i + w] += err * 5 / 16;
+          if (x + 1 < w) buf[i + w + 1] += err * 1 / 16;
         }
       }
     }
-
   } else if (algo === 'atkinson') {
-    const buf = new Float32Array(pre);
+    let buf = new Float32Array(pre);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        const old = buf[i];
-        const s = brightnessToState(old, numStates);
+        let i = y * w + x;
+        let old = buf[i];
+        let s = Math.min(numStates - 1, Math.max(0, Math.floor((1 - old / 255) * numStates)));
         out[i] = s;
-        const qb = stateToMidBrightness(s, numStates);
-        const err = (old - qb) / 8;
-        if (x + 1 < w)           buf[i + 1]     += err;
-        if (x + 2 < w)           buf[i + 2]     += err;
+        let qb = (1 - (s + 0.5) / numStates) * 255;
+        let err = (old - qb) / 8;
+        if (x + 1 < w) buf[i + 1] += err;
+        if (x + 2 < w) buf[i + 2] += err;
         if (y + 1 < h) {
-          if (x - 1 >= 0)        buf[i + w - 1] += err;
-                                 buf[i + w]     += err;
-          if (x + 1 < w)         buf[i + w + 1] += err;
+          if (x - 1 >= 0) buf[i + w - 1] += err;
+          buf[i + w] += err;
+          if (x + 1 < w) buf[i + w + 1] += err;
         }
-        if (y + 2 < h)           buf[i + 2*w]   += err;
+        if (y + 2 < h) buf[i + 2*w] += err;
       }
     }
-
   } else if (algo === 'sierra') {
-    const buf = new Float32Array(pre);
+    let buf = new Float32Array(pre);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const i = y * w + x;
-        const old = buf[i];
-        const s = brightnessToState(old, numStates);
+        let i = y * w + x;
+        let old = buf[i];
+        let s = Math.min(numStates - 1, Math.max(0, Math.floor((1 - old / 255) * numStates)));
         out[i] = s;
-        const qb = stateToMidBrightness(s, numStates);
-        const err = old - qb;
-        if (x + 1 < w)           buf[i + 1]     += err * 2 / 4;
+        let qb = (1 - (s + 0.5) / numStates) * 255;
+        let err = old - qb;
+        if (x + 1 < w) buf[i + 1] += err * 2 / 4;
         if (y + 1 < h) {
-          if (x - 1 >= 0)        buf[i + w - 1] += err * 1 / 4;
-          if (x + 1 < w)         buf[i + w + 1] += err * 1 / 4;
+          if (x - 1 >= 0) buf[i + w - 1] += err * 1 / 4;
+          if (x + 1 < w) buf[i + w + 1] += err * 1 / 4;
         }
       }
     }
@@ -338,77 +321,31 @@ function runDither(briArr, w, h, numStates, p) {
   return out;
 }
 
-function brightnessToState(b, numStates) {
-  return Math.min(numStates - 1, Math.max(0, Math.floor((1 - b / 255) * numStates)));
-}
-
-function stateToMidBrightness(s, numStates) {
-  return (1 - (s + 0.5) / numStates) * 255;
-}
-
-function brightnessToScale(b, p) {
-  return p.minScale + (1 - b / 255) * (p.maxScale - p.minScale);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// GRID / CROP HELPERS
+// HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 function getTargetAspect(aspectStr, mW, mH) {
-  const map = { '1x1': 1, '16x9': 16/9, '9x16': 9/16, '4x3': 4/3, '3x2': 3/2, '2x1': 2 };
+  let map = { '1x1': 1, '16x9': 16/9, '9x16': 9/16, '4x3': 4/3 };
   return map[aspectStr] || (mW / mH);
 }
 
-function computeGrid(mW, mH, p) {
-  const tar = getTargetAspect(p.aspectRatio, mW, mH);
-  const res = p.canvasRes;
-  const gr  = p.gridRes;
-  let outW, outH, gridCols, gridRows;
-  if (tar >= 1) {
-    outW = res; outH = Math.floor(res / tar);
-    gridCols = gr; gridRows = Math.max(1, Math.floor(gr / tar));
-  } else {
-    outH = res; outW = Math.floor(res * tar);
-    gridRows = gr; gridCols = Math.max(1, Math.floor(gr * tar));
-  }
-  return { outW, outH, gridCols: Math.max(1, gridCols), gridRows: Math.max(1, gridRows) };
-}
-
-function computeCrop(mW, mH, p) {
-  const tar = getTargetAspect(p.aspectRatio, mW, mH);
-  const mAspect = mW / mH;
-  let srcW = mW, srcH = mH;
-  if (p.aspectRatio !== 'original') {
-    if (tar > mAspect) { srcW = mW; srcH = mW / tar; }
-    else               { srcH = mH; srcW = mH * tar; }
-  }
-  const cw = srcW / p.mediaScale;
-  const ch = srcH / p.mediaScale;
-  return { sx: mW/2 - cw/2, sy: mH/2 - ch/2, cw, ch };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GET ALL PARAMS FROM DOM
-// ─────────────────────────────────────────────────────────────────────────────
 function getParams() {
-  const v = id => document.getElementById(id);
   return {
-    gridRes:      parseInt(v('gridRes').value),
-    aspectRatio:  v('aspectRatio').value,
-    invert:       v('invertMapping').checked,
-    minScale:     parseInt(v('minScale').value) / 100,
-    maxScale:     parseInt(v('maxScale').value) / 100,
-    snapRot:      v('snapRot').checked,
-    rotInterval:  parseInt(v('rotInterval').value),
-    doFill:       v('fillSvg').checked,
-    mediaScale:   parseInt(v('mediaScale').value) / 100,
-    canvasRes:    parseInt(v('canvasRes').value),
-    enableStateMap: v('enableStateMap').checked,
-    mapIntensity: parseInt(v('mapIntensity').value) / 100,
-    algo:         v('ditherAlgo').value,
-    brightness:   parseInt(v('brightness').value),
-    contrast:     parseInt(v('contrast').value),
-    gamma:        parseInt(v('gamma').value) / 100,
-    stateColors:  Array.from({ length: NUM_STATES }, (_, i) => v(`color${i}`).value),
+    aspectRatio: document.getElementById('aspectRatio').value,
+    mediaScale: parseInt(document.getElementById('mediaScale').value) / 100,
+    canvasRes: parseInt(document.getElementById('canvasRes').value),
+    gridRes: parseInt(document.getElementById('gridRes').value),
+    ditherAlgo: document.getElementById('ditherAlgo').value,
+    bgColor: document.getElementById('bgColor').value,
+    fillSvg: document.getElementById('fillSvg').checked,
+    invertMapping: document.getElementById('invertMapping').checked,
+    enableStateMap: document.getElementById('enableStateMap').checked,
+    mapIntensity: parseInt(document.getElementById('mapIntensity').value) / 100,
+    minScale: parseInt(document.getElementById('minScale').value) / 100,
+    maxScale: parseInt(document.getElementById('maxScale').value) / 100,
+    snapRot: document.getElementById('snapRot').checked,
+    rotInterval: parseInt(document.getElementById('rotInterval').value),
+    algo: document.getElementById('ditherAlgo').value
   };
 }
 
@@ -416,295 +353,366 @@ function getParams() {
 // SVG EXPORT
 // ─────────────────────────────────────────────────────────────────────────────
 function exportSVG() {
-  if (!currentMedia || !cachedBriArr || !cachedStateArr) { alert('No media loaded or not ready.'); return; }
+  if (!currentMedia || !cachedBriArr || !cachedStateArr) { alert('No media ready'); return; }
 
-  const mW = currentMedia.width  || (currentMedia.elt && currentMedia.elt.videoWidth)  || 0;
-  const mH = currentMedia.height || (currentMedia.elt && currentMedia.elt.videoHeight) || 0;
+  let mW = currentMedia.width || (currentMedia.elt && currentMedia.elt.videoWidth) || 0;
+  let mH = currentMedia.height || (currentMedia.elt && currentMedia.elt.videoHeight) || 0;
   if (!mW || !mH) return;
 
-  const p = getParams();
-  const { gridCols, gridRows, outW, outH } = computeGrid(mW, mH, p);
-  const cellW = outW / gridCols;
-  const cellH = outH / gridRows;
-  const cellSize = Math.min(cellW, cellH);
+  let p = getParams();
+  let aspect = getTargetAspect(p.aspectRatio, mW, mH);
+  let outW = p.canvasRes, outH = Math.floor(p.canvasRes / aspect);
+  let gridCols = p.gridRes, gridRows = Math.max(1, Math.floor(p.gridRes / aspect));
+  let cellW = outW / gridCols, cellH = outH / gridRows;
+  let drawSize = Math.min(cellW, cellH);
 
-  const bg = document.getElementById('bgColor').value;
-  const lines = [
-    `<?xml version="1.0" encoding="UTF-8"?>`,
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${outW} ${outH}">`,
-    `<rect width="${outW}" height="${outH}" fill="${bg}"/>`,
-  ];
+  let bg = document.getElementById('bgColor').value;
+  let svg = `<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${outW} ${outH}">\n<rect width="${outW}" height="${outH}" fill="${bg}"/>\n`;
 
   for (let y = 0; y < gridRows; y++) {
     for (let x = 0; x < gridCols; x++) {
-      const idx   = y * gridCols + x;
-      const state = p.enableStateMap ? cachedStateArr[idx] : 0;
-      const sf    = brightnessToScale(cachedBriArr[idx], p);
+      let idx = y * gridCols + x;
+      let state = p.enableStateMap ? cachedStateArr[idx] : 6;
+      let brightness = cachedBriArr[idx];
+      let midtoneDist = Math.abs(brightness - 128);
+      let sf = map(midtoneDist, 0, 128, p.minScale, p.maxScale);
       if (sf <= 0.01) continue;
 
-      const cx   = x * cellW + cellW / 2;
-      const cy   = y * cellH + cellH / 2;
-      const sz   = cellSize * sf;
-      const color = p.doFill ? p.stateColors[state] : '#999999';
-      const shape = svgImages[state] ? 'circle' : stateShapes[state];
+      let cx = x * cellW + cellW / 2, cy = y * cellH + cellH / 2;
+      let sz = drawSize * sf;
+      let color = document.getElementById(`color${state}`).value;
+      let shape = stateShapes[state];
 
-      lines.push(svgShapeEl(shape, cx, cy, sz, color));
+      svg += svgShape(shape, cx, cy, sz, color) + '\n';
     }
   }
 
-  lines.push('</svg>');
+  svg += '</svg>';
 
-  const blob = new Blob([lines.join('\n')], { type: 'image/svg+xml' });
-  const url  = URL.createObjectURL(blob);
-  const a    = Object.assign(document.createElement('a'), { href: url, download: 'dither_export.svg' });
+  let blob = new Blob([svg], { type: 'image/svg+xml' });
+  let url = URL.createObjectURL(blob);
+  let a = document.createElement('a');
+  a.href = url;
+  a.download = 'dither_export.svg';
   a.click();
   URL.revokeObjectURL(url);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// VIDEO RECORDING
-// ─────────────────────────────────────────────────────────────────────────────
-function toggleRecording() {
-  if (!isRecording) {
-    const stream = document.querySelector('canvas').captureStream(30);
-    let mimeType = 'video/webm'; exportExt = 'webm';
-    if (MediaRecorder.isTypeSupported('video/mp4')) { mimeType = 'video/mp4'; exportExt = 'mp4'; }
-
-    mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 25_000_000 });
-    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
-    mediaRecorder.onstop = () => {
-      const blob = new Blob(recordedChunks, { type: mimeType });
-      const url  = URL.createObjectURL(blob);
-      const a    = Object.assign(document.createElement('a'), {
-        href: url, download: `dither_export.${exportExt}`, style: 'display:none'
-      });
-      document.body.appendChild(a); a.click(); URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      recordedChunks = [];
-    };
-    mediaRecorder.start();
-    isRecording = true;
-    document.getElementById('exportVid').textContent = '■ STOP & SAVE';
-    document.getElementById('recStatus').style.display = 'block';
-
-  } else {
-    mediaRecorder.stop();
-    isRecording = false;
-    document.getElementById('exportVid').textContent = '⬤ RECORD VIDEO';
-    document.getElementById('recStatus').style.display = 'none';
+function svgShape(type, cx, cy, size, color) {
+  let h = size * 0.866, t = size * 0.28;
+  switch (type) {
+    case 'circle': return `<circle cx="${cx}" cy="${cy}" r="${size/2}" fill="${color}"/>`;
+    case 'square': return `<rect x="${cx-size/2}" y="${cy-size/2}" width="${size}" height="${size}" fill="${color}"/>`;
+    case 'diamond': return `<polygon points="${cx},${cy-size/2} ${cx+size/2},${cy} ${cx},${cy+size/2} ${cx-size/2},${cy}" fill="${color}"/>`;
+    case 'cross': return `<rect x="${cx-size/2}" y="${cy-t/2}" width="${size}" height="${t}" fill="${color}"/><rect x="${cx-t/2}" y="${cy-size/2}" width="${t}" height="${size}" fill="${color}"/>`;
+    case 'ring': return `<circle cx="${cx}" cy="${cy}" r="${size*0.36}" fill="none" stroke="${color}" stroke-width="${size*0.18}"/>`;
+    case 'triangle': return `<polygon points="${cx},${cy-h/2} ${cx+size/2},${cy+h/2} ${cx-size/2},${cy+h/2}" fill="${color}"/>`;
+    case 'dot': return `<circle cx="${cx}" cy="${cy}" r="${size*0.25}" fill="${color}"/>`;
+    default: return `<circle cx="${cx}" cy="${cy}" r="${size/2}" fill="${color}"/>`;
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PRESET SAVE / LOAD / RESET
+// AUDIO
+// ─────────────────────────────────────────────────────────────────────────────
+async function startMicrophone() {
+  try {
+    audioContext = audioContext || new (window.AudioContext || window.webkitAudioContext)();
+    let stream = await navigator.mediaDevices.getUserUserMedia({ audio: true });
+    audioSource = audioContext.createMediaStreamSource(stream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    audioSource.connect(analyser);
+    dataArray = new Uint8Array(analyser.frequencyBinCount);
+    audioEnabled = true;
+    document.getElementById('micBtn').textContent = '⏹ STOP MICROPHONE';
+    animateAudio();
+  } catch (e) {
+    alert('Microphone access denied');
+  }
+}
+
+function stopMicrophone() {
+  if (audioSource) {
+    audioSource.disconnect();
+    audioSource = null;
+  }
+  audioEnabled = false;
+  document.getElementById('micBtn').textContent = '🎤 START MICROPHONE';
+}
+
+function loadAudioFile(file) {
+  let reader = new FileReader();
+  reader.onload = e => {
+    audioContext = audioContext || new (window.AudioContext || window.webkitAudioContext)();
+    audioContext.decodeAudioData(e.target.result, buffer => {
+      audioFileContext = audioContext.createBufferSource();
+      audioFileContext.buffer = buffer;
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      audioFileContext.connect(analyser);
+      analyser.connect(audioContext.destination);
+      audioFileContext.start(0);
+      dataArray = new Uint8Array(analyser.frequencyBinCount);
+      audioEnabled = true;
+      animateAudio();
+    });
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function animateAudio() {
+  if (!audioEnabled || !analyser) return;
+
+  analyser.getByteFrequencyData(dataArray);
+
+  let bassSum = 0, midSum = 0, trebleSum = 0;
+  let bassCount = Math.floor(dataArray.length * 0.1);
+  let midStart = bassCount, midEnd = Math.floor(dataArray.length * 0.6);
+  let trebleStart = midEnd;
+
+  for (let i = 0; i < bassCount; i++) bassSum += dataArray[i];
+  for (let i = midStart; i < midEnd; i++) midSum += dataArray[i];
+  for (let i = trebleStart; i < dataArray.length; i++) trebleSum += dataArray[i];
+
+  let sens = parseInt(document.getElementById('audioSensitivity').value) / 100;
+  audioData.bass = (bassSum / bassCount / 255) * sens;
+  audioData.mid = (midSum / (midEnd - midStart) / 255) * sens;
+  audioData.treble = (trebleSum / (dataArray.length - trebleStart) / 255) * sens;
+  audioData.overall = (audioData.bass + audioData.mid + audioData.treble) / 3;
+
+  requestAnimationFrame(animateAudio);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRESETS
 // ─────────────────────────────────────────────────────────────────────────────
 function savePreset() {
-  const p = getParams();
-  const blob = new Blob([JSON.stringify({ ...p, stateShapes: [...stateShapes] }, null, 2)],
-    { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  Object.assign(document.createElement('a'), { href: url, download: 'dither_preset.json' }).click();
+  let preset = {
+    aspectRatio: document.getElementById('aspectRatio').value,
+    mediaScale: document.getElementById('mediaScale').value,
+    canvasRes: document.getElementById('canvasRes').value,
+    gridRes: document.getElementById('gridRes').value,
+    ditherAlgo: document.getElementById('ditherAlgo').value,
+    bgColor: document.getElementById('bgColor').value,
+    fillSvg: document.getElementById('fillSvg').checked,
+    invertMapping: document.getElementById('invertMapping').checked,
+    enableStateMap: document.getElementById('enableStateMap').checked,
+    mapIntensity: document.getElementById('mapIntensity').value,
+    minScale: document.getElementById('minScale').value,
+    maxScale: document.getElementById('maxScale').value,
+    snapRot: document.getElementById('snapRot').checked,
+    rotInterval: document.getElementById('rotInterval').value,
+    stateShapes: stateShapes.slice(),
+    colors: Array.from({ length: 7 }, (_, i) => document.getElementById(`color${i}`).value)
+  };
+
+  let blob = new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json' });
+  let url = URL.createObjectURL(blob);
+  let a = document.createElement('a');
+  a.href = url;
+  a.download = 'dither_preset.json';
+  a.click();
   URL.revokeObjectURL(url);
 }
 
 function loadPreset(e) {
-  const file = e.target.files[0];
+  let file = e.target.files[0];
   if (!file) return;
-  const reader = new FileReader();
+  let reader = new FileReader();
   reader.onload = ev => {
     try {
-      const p = JSON.parse(ev.target.result);
-      const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
-      const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = v; };
-
-      if (p.gridRes    !== undefined) set('gridRes', p.gridRes);
-      if (p.aspectRatio)              set('aspectRatio', p.aspectRatio);
-      if (p.mediaScale !== undefined) set('mediaScale', p.mediaScale * 100);
-      if (p.canvasRes  !== undefined) set('canvasRes', p.canvasRes);
-      if (p.mapIntensity !== undefined) set('mapIntensity', p.mapIntensity * 100);
-      if (p.minScale   !== undefined) set('minScale', p.minScale * 100);
-      if (p.maxScale   !== undefined) set('maxScale', p.maxScale * 100);
-      if (p.rotInterval !== undefined) set('rotInterval', p.rotInterval);
-      if (p.algo)                     set('ditherAlgo', p.algo);
-      if (p.brightness !== undefined) set('brightness', p.brightness);
-      if (p.contrast   !== undefined) set('contrast', p.contrast);
-      if (p.gamma      !== undefined) set('gamma', Math.round(p.gamma * 100));
-      if (p.bgColor)                  set('bgColor', p.bgColor);
-      if (p.invert     !== undefined) chk('invertMapping', p.invert);
-      if (p.enableStateMap !== undefined) chk('enableStateMap', p.enableStateMap);
-      if (p.doFill     !== undefined) chk('fillSvg', p.doFill);
-      if (p.snapRot    !== undefined) chk('snapRot', p.snapRot);
-      if (p.stateColors) p.stateColors.forEach((c, i) => set(`color${i}`, c));
-      if (p.stateShapes) {
-        p.stateShapes.forEach((s, i) => { stateShapes[i] = s; set(`shape${i}`, s); });
-      }
-      document.querySelectorAll('input[type="range"]').forEach(el => el.dispatchEvent(new Event('input')));
-      cacheValid = false;
-    } catch { alert('Invalid preset file.'); }
+      let preset = JSON.parse(ev.target.result);
+      if (preset.aspectRatio) document.getElementById('aspectRatio').value = preset.aspectRatio;
+      if (preset.mediaScale) document.getElementById('mediaScale').value = preset.mediaScale;
+      if (preset.canvasRes) document.getElementById('canvasRes').value = preset.canvasRes;
+      if (preset.gridRes) document.getElementById('gridRes').value = preset.gridRes;
+      if (preset.ditherAlgo) document.getElementById('ditherAlgo').value = preset.ditherAlgo;
+      if (preset.bgColor) document.getElementById('bgColor').value = preset.bgColor;
+      if (preset.fillSvg !== undefined) document.getElementById('fillSvg').checked = preset.fillSvg;
+      if (preset.invertMapping !== undefined) document.getElementById('invertMapping').checked = preset.invertMapping;
+      if (preset.enableStateMap !== undefined) document.getElementById('enableStateMap').checked = preset.enableStateMap;
+      if (preset.mapIntensity) document.getElementById('mapIntensity').value = preset.mapIntensity;
+      if (preset.minScale) document.getElementById('minScale').value = preset.minScale;
+      if (preset.maxScale) document.getElementById('maxScale').value = preset.maxScale;
+      if (preset.snapRot !== undefined) document.getElementById('snapRot').checked = preset.snapRot;
+      if (preset.rotInterval) document.getElementById('rotInterval').value = preset.rotInterval;
+      if (preset.stateShapes) preset.stateShapes.forEach((s, i) => { stateShapes[i] = s; if (document.getElementById(`shape${i}`)) document.getElementById(`shape${i}`).value = s; });
+      if (preset.colors) preset.colors.forEach((c, i) => document.getElementById(`color${i}`).value = c);
+      lastParams = null;
+    } catch { alert('Invalid preset'); }
   };
   reader.readAsText(file);
   e.target.value = '';
 }
 
 function resetAll() {
-  const defaults = {
-    gridRes: 50, mediaScale: 100, canvasRes: 1000, mapIntensity: 100,
-    minScale: 20, maxScale: 120, rotInterval: 500,
-    brightness: 0, contrast: 0, gamma: 100
-  };
-  Object.entries(defaults).forEach(([id, v]) => {
-    const el = document.getElementById(id);
-    if (el) { el.value = v; el.dispatchEvent(new Event('input')); }
-  });
   document.getElementById('aspectRatio').value = 'original';
-  document.getElementById('ditherAlgo').value  = 'ordered4';
-  document.getElementById('bgColor').value     = '#000000';
-  document.getElementById('fillSvg').checked        = true;
-  document.getElementById('invertMapping').checked  = false;
+  document.getElementById('mediaScale').value = 100;
+  document.getElementById('canvasRes').value = 1000;
+  document.getElementById('gridRes').value = 50;
+  document.getElementById('ditherAlgo').value = 'ordered4';
+  document.getElementById('bgColor').value = '#000000';
+  document.getElementById('fillSvg').checked = true;
+  document.getElementById('invertMapping').checked = false;
   document.getElementById('enableStateMap').checked = true;
-  document.getElementById('snapRot').checked        = false;
+  document.getElementById('mapIntensity').value = 100;
+  document.getElementById('minScale').value = 50;
+  document.getElementById('maxScale').value = 150;
+  document.getElementById('snapRot').checked = true;
+  document.getElementById('rotInterval').value = 500;
 
-  DEFAULT_COLORS.forEach((c, i) => document.getElementById(`color${i}`).value = c);
-  DEFAULT_SHAPES.forEach((s, i) => {
-    stateShapes[i] = s;
-    const el = document.getElementById(`shape${i}`);
-    if (el) el.value = s;
-  });
-  cacheValid = false;
+  let colors = ['#ffffff','#cccccc','#999999','#777777','#555555','#333333','#111111'];
+  colors.forEach((c, i) => document.getElementById(`color${i}`).value = c);
+  stateShapes.forEach((_, i) => { stateShapes[i] = 'circle'; if (document.getElementById(`shape${i}`)) document.getElementById(`shape${i}`).value = 'circle'; });
+
+  lastParams = null;
+  updateAllLabels();
+}
+
+function updateAllLabels() {
+  document.getElementById('val-mediaScale').innerText = document.getElementById('mediaScale').value + '%';
+  document.getElementById('val-canvasRes').innerText = document.getElementById('canvasRes').value + 'px';
+  document.getElementById('val-gridRes').innerText = document.getElementById('gridRes').value;
+  document.getElementById('val-mapIntensity').innerText = document.getElementById('mapIntensity').value + '%';
+  document.getElementById('val-minScale').innerText = document.getElementById('minScale').value + '%';
+  document.getElementById('val-maxScale').innerText = document.getElementById('maxScale').value + '%';
+  document.getElementById('val-rotInterval').innerText = document.getElementById('rotInterval').value + 'ms';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DOM BUILDERS & LISTENERS
+// DOM
 // ─────────────────────────────────────────────────────────────────────────────
-function buildStateUI() {
-  const container = document.getElementById('stateList');
-  for (let i = 0; i < NUM_STATES; i++) {
-    const div = document.createElement('div');
-    div.className = 'state-item';
-    div.innerHTML = `
-      <input type="color" id="color${i}" value="${DEFAULT_COLORS[i]}" class="state-color">
-      <div class="state-meta">
-        <div class="state-name">${STATE_LABELS[i]}</div>
-        <select class="shape-select" id="shape${i}">
-          ${SHAPES.map(s => `<option value="${s}">${s.toUpperCase()}</option>`).join('')}
-        </select>
-      </div>
-      <div class="state-actions">
-        <label class="svg-btn" id="svgLabel${i}" for="svg${i}">SVG</label>
-        <input type="file" id="svg${i}" accept=".svg">
-        <button class="rst-btn" id="reset${i}">×</button>
-      </div>
-    `;
-    container.appendChild(div);
+function buildShapeUI() {
+  for (let i = 0; i < 7; i++) {
+    let select = document.createElement('select');
+    select.id = `shape${i}`;
+    select.className = 'shape-select';
+    SHAPES.forEach(s => {
+      let opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s.toUpperCase();
+      if (s === 'circle') opt.selected = true;
+      select.appendChild(opt);
+    });
+    select.addEventListener('change', e => { stateShapes[i] = e.target.value; lastParams = null; });
 
-    document.getElementById(`shape${i}`).addEventListener('change', e => {
-      stateShapes[i] = e.target.value;
-      cacheValid = false;
-    });
-    document.getElementById(`svg${i}`).addEventListener('change', e => {
-      const file = e.target.files[0];
+    let svg = document.getElementById(`svg${i}`);
+    svg.addEventListener('change', e => {
+      let file = e.target.files[0];
       if (!file) return;
-      loadImage(URL.createObjectURL(file), img => {
-        svgImages[i] = img;
-        document.getElementById(`svgLabel${i}`).classList.add('has-svg');
-        cacheValid = false;
-      });
-    });
-    document.getElementById(`reset${i}`).addEventListener('click', () => {
-      document.getElementById(`svg${i}`).value = '';
-      svgImages[i] = null;
-      document.getElementById(`svgLabel${i}`).classList.remove('has-svg');
-      cacheValid = false;
+      loadImage(URL.createObjectURL(file), img => { svgs[i] = img; });
     });
   }
 }
 
-function setupSectionToggles() {
-  document.querySelectorAll('.section-header').forEach(header => {
-    const body = document.getElementById(header.dataset.toggle);
-    header.classList.add('open');
-    header.addEventListener('click', () => {
-      const isOpen = header.classList.toggle('open');
-      body.classList.toggle('hidden', !isOpen);
-    });
-  });
-}
-
-function setupSliders() {
-  const defs = [
-    ['mediaScale',   'val-mediaScale',   v => v + '%'],
-    ['canvasRes',    'val-canvasRes',     v => v + 'px'],
-    ['gridRes',      'val-gridRes',       v => v],
-    ['mapIntensity', 'val-mapIntensity',  v => v + '%'],
-    ['minScale',     'val-minScale',      v => v + '%'],
-    ['maxScale',     'val-maxScale',      v => v + '%'],
-    ['rotInterval',  'val-rotInterval',   v => v + 'ms'],
-    ['brightness',   'val-brightness',    v => (v > 0 ? '+' : '') + v],
-    ['contrast',     'val-contrast',      v => (v > 0 ? '+' : '') + v],
-    ['gamma',        'val-gamma',         v => (v / 100).toFixed(1)],
-  ];
-  defs.forEach(([id, valId, fmt]) => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('input', () => {
-      document.getElementById(valId).textContent = fmt(el.value);
-      cacheValid = false;
-    });
-  });
-}
-
-function setupMediaListeners() {
+function setupDOMListeners() {
+  // Media
   document.getElementById('webcamBtn').addEventListener('click', () => {
-    cleanupMedia();
-    const cap = createCapture(VIDEO, () => {
-      currentMedia = cap; isWebcam = true;
-      document.getElementById('webcamBtn').style.display = 'none';
-      document.getElementById('stopWebcamBtn').style.display = '';
-      cacheValid = false;
-    });
-    cap.hide();
-  });
-
-  document.getElementById('stopWebcamBtn').addEventListener('click', () => {
-    cleanupMedia();
-    document.getElementById('webcamBtn').style.display = '';
-    document.getElementById('stopWebcamBtn').style.display = 'none';
+    if (isWebcam) {
+      currentVideo && currentVideo.remove();
+      isWebcam = false;
+      currentMedia = null;
+      document.getElementById('webcamBtn').innerText = 'Start Webcam';
+    } else {
+      let cap = createCapture(VIDEO, () => { currentMedia = cap; isWebcam = true; document.getElementById('webcamBtn').innerText = 'Stop Webcam'; });
+      cap.hide();
+    }
   });
 
   document.getElementById('mediaUpload').addEventListener('change', e => {
-    const file = e.target.files[0];
+    let file = e.target.files[0];
     if (!file) return;
-    cleanupMedia();
-    const url = URL.createObjectURL(file);
-    const info = document.getElementById('mediaInfo');
-    info.style.display = 'block';
-    info.textContent = `${file.name}  ·  ${(file.size / 1024 / 1024).toFixed(1)} MB`;
-
+    let url = URL.createObjectURL(file);
     if (file.type.startsWith('video/')) {
-      const vid = createVideo(url, () => {
-        vid.loop(); vid.volume(0); vid.hide();
-        currentVideo = vid; currentMedia = vid;
-        cacheValid = false;
-      });
+      let vid = createVideo(url, () => { vid.loop(); vid.volume(0); vid.hide(); currentMedia = vid; });
     } else {
-      loadImage(url, img => { currentMedia = img; cacheValid = false; });
+      loadImage(url, img => { currentMedia = img; });
     }
   });
-}
 
-function setupExportListeners() {
-  document.getElementById('exportPng').addEventListener('click', () => saveCanvas('dither_export', 'png'));
-  document.getElementById('exportSvg').addEventListener('click', exportSVG);
-  document.getElementById('exportVid').addEventListener('click', toggleRecording);
-}
+  // SVG / Reset buttons
+  for (let i = 0; i < 7; i++) {
+    document.getElementById(`reset${i}`).addEventListener('click', () => {
+      document.getElementById(`svg${i}`).value = '';
+      svgs[i] = null;
+    });
+  }
 
-function setupPresetListeners() {
+  // Audio
+  document.getElementById('enableAudio').addEventListener('change', e => {
+    document.getElementById('audioControls').style.display = e.target.checked ? 'block' : 'none';
+  });
+
+  document.getElementById('micBtn').addEventListener('click', () => {
+    if (audioEnabled) stopMicrophone();
+    else startMicrophone();
+  });
+
+  document.getElementById('audioUpload').addEventListener('change', e => {
+    if (e.target.files[0]) loadAudioFile(e.target.files[0]);
+  });
+
+  // Presets
   document.getElementById('savePresetBtn').addEventListener('click', savePreset);
   document.getElementById('loadPresetInput').addEventListener('change', loadPreset);
   document.getElementById('resetAllBtn').addEventListener('click', resetAll);
-}
 
-function cleanupMedia() {
-  if (currentVideo) { currentVideo.pause(); currentVideo.remove(); currentVideo = null; }
-  currentMedia = null; isWebcam = false;
-  cacheValid = false;
+  // Export
+  document.getElementById('exportPng').addEventListener('click', () => saveCanvas('dither_export', 'png'));
+  document.getElementById('exportSvg').addEventListener('click', exportSVG);
+
+  document.getElementById('exportVid').addEventListener('click', () => {
+    if (!isRecording) {
+      let stream = document.querySelector('canvas').captureStream(30);
+      let mimeType = 'video/webm';
+      exportExt = 'webm';
+      if (MediaRecorder.isTypeSupported('video/mp4')) { mimeType = 'video/mp4'; exportExt = 'mp4'; }
+
+      mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 20000000 });
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        let blob = new Blob(recordedChunks, { type: mimeType });
+        let url = URL.createObjectURL(blob);
+        let a = document.createElement('a');
+        a.href = url;
+        a.download = `dither_export.${exportExt}`;
+        a.click();
+        URL.revokeObjectURL(url);
+        recordedChunks = [];
+      };
+      mediaRecorder.start();
+      isRecording = true;
+      document.getElementById('exportVid').innerText = 'Stop & Save Video';
+      document.getElementById('exportVid').style.backgroundColor = '#aa2a2a';
+      document.getElementById('recStatus').style.display = 'block';
+    } else {
+      mediaRecorder.stop();
+      isRecording = false;
+      document.getElementById('exportVid').innerText = 'Record Video (.mp4 / .webm)';
+      document.getElementById('exportVid').style.backgroundColor = '#5a2a2a';
+      document.getElementById('recStatus').style.display = 'none';
+    }
+  });
+
+  // Sliders
+  ['mediaScale', 'canvasRes', 'gridRes', 'mapIntensity', 'minScale', 'maxScale', 'rotInterval', 'audioSensitivity'].forEach(id => {
+    let el = document.getElementById(id);
+    if (el) el.addEventListener('input', () => { lastParams = null; updateAllLabels(); });
+  });
+
+  ['ditherAlgo', 'aspectRatio'].forEach(id => {
+    document.getElementById(id).addEventListener('change', () => { lastParams = null; });
+  });
+
+  ['fillSvg', 'invertMapping', 'enableStateMap', 'snapRot'].forEach(id => {
+    document.getElementById(id).addEventListener('change', () => { lastParams = null; });
+  });
+
+  document.querySelectorAll('input[type="color"]').forEach(el => {
+    el.addEventListener('change', () => { lastParams = null; });
+  });
+
+  buildShapeUI();
+  updateAllLabels();
 }
